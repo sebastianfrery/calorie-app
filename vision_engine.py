@@ -14,7 +14,7 @@ from models import FoodAnalysis, Macronutrients
 
 load_dotenv()
 
-_PROMPT = """Analyze the food in this image and respond ONLY with a valid JSON object in this exact format:
+_PROMPT_BASIC = """Analyze the food in this image and respond ONLY with a valid JSON object in this exact format:
 {
   "food_name": "name of the food or dish",
   "estimated_calories": <integer>,
@@ -27,6 +27,25 @@ _PROMPT = """Analyze the food in this image and respond ONLY with a valid JSON o
   "confidence": "high" | "medium" | "low"
 }
 If no food is visible, set food_name to "No food detected" and all numeric values to 0."""
+
+_PROMPT_PRO = """Analyze the food in this image and respond ONLY with a valid JSON object in this exact format:
+{
+  "food_name": "name of the food or dish",
+  "estimated_calories": <integer>,
+  "macronutrients": {
+    "protein_g": <float>,
+    "carbs_g": <float>,
+    "fat_g": <float>,
+    "fiber_g": <float>
+  },
+  "confidence": "high" | "medium" | "low",
+  "portion_size_g": <integer, estimated total weight or volume in grams or ml>,
+  "allergens": ["list only allergens clearly present or highly likely, e.g. gluten, dairy, eggs, nuts, soy, fish, shellfish"],
+  "health_score": <integer 1-10>,
+  "health_score_reason": "one sentence nutritional justification for the score"
+}
+Scoring guide: 1-3 = highly processed/high sugar-fat/low nutrition; 4-6 = moderate; 7-10 = whole foods, balanced macros, high micronutrients.
+If no food is visible, set food_name to "No food detected", all numeric values to 0, allergens to [], health_score to 0, health_score_reason to ""."""
 
 _PIL_FORMAT = {
     "image/jpeg": "JPEG",
@@ -72,6 +91,10 @@ def _parse_response(raw: str, model_used: str) -> FoodAnalysis:
             macronutrients=Macronutrients(**data["macronutrients"]),
             model_used=model_used,
             confidence=data.get("confidence", "medium"),
+            portion_size_g=data.get("portion_size_g"),
+            allergens=data.get("allergens") or None,
+            health_score=data.get("health_score") or None,
+            health_score_reason=data.get("health_score_reason") or None,
         )
     except Exception:
         return FoodAnalysis(
@@ -99,7 +122,7 @@ def _analyze_basic(image_bytes: bytes, media_type: str) -> FoodAnalysis:
                         "type": "image_url",
                         "image_url": {"url": f"data:{media_type};base64,{b64}"},
                     },
-                    {"type": "text", "text": _PROMPT},
+                    {"type": "text", "text": _PROMPT_BASIC},
                 ],
             }
         ],
@@ -112,14 +135,14 @@ def _analyze_basic(image_bytes: bytes, media_type: str) -> FoodAnalysis:
 
 
 def _analyze_pro(image_bytes: bytes, media_type: str) -> FoodAnalysis:
-    """Claude Sonnet via Anthropic — Pro tier."""
+    """Claude 3.5 Sonnet via Anthropic — Pro tier."""
     image_bytes = _resize(image_bytes, media_type)
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     b64 = base64.b64encode(image_bytes).decode("utf-8")
 
     response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=512,
+        model="claude-3-5-sonnet-20241022",
+        max_tokens=1024,
         messages=[
             {
                 "role": "user",
@@ -132,14 +155,14 @@ def _analyze_pro(image_bytes: bytes, media_type: str) -> FoodAnalysis:
                             "data": b64,
                         },
                     },
-                    {"type": "text", "text": _PROMPT},
+                    {"type": "text", "text": _PROMPT_PRO},
                 ],
             }
         ],
     )
 
     raw = response.content[0].text
-    return _parse_response(raw, model_used="claude-sonnet-4-6")
+    return _parse_response(raw, model_used="claude-3-5-sonnet-20241022")
 
 
 def analyze_food(

@@ -9,3 +9,4 @@ supabase==2.9.1
 streamlit==1.39.0
 stripe==10.12.0
 Pillow>=10.0.0
+pandas>=1.4.0

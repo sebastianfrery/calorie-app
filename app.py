@@ -1,52 +1,36 @@
 import os
 from datetime import date
 
-import requests
+import pandas as pd
+import stripe
 import streamlit as st
 from dotenv import load_dotenv
-from supabase import create_client
+
+from database import get_cached_analysis, get_today_entries, get_user, hash_image, save_analysis
+from health_engine import analyze_health
+from vision_engine import analyze_food
 
 load_dotenv()
 
-BACKEND_URL = "http://localhost:8000"
+stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
+STRIPE_SUCCESS_URL = os.environ.get("STRIPE_SUCCESS_URL", "http://localhost:8501?vip_activated=1")
+STRIPE_CANCEL_URL = os.environ.get("STRIPE_CANCEL_URL", "http://localhost:8501")
 
 st.set_page_config(page_title="CalorieApp", page_icon="🍽️", layout="centered")
-
-
-@st.cache_resource
-def _supabase():
-    return create_client(
-        os.environ["SUPABASE_URL"],
-        os.environ["SUPABASE_SERVICE_ROLE_KEY"],
-    )
-
-
-def get_today_entries(email: str | None = None) -> list[dict]:
-    if not email:
-        return []
-    today = date.today().isoformat()
-    return (
-        _supabase()
-        .table("food_analyses")
-        .select("food_name, estimated_calories, protein_g, carbs_g, fat_g, fiber_g, created_at")
-        .eq("analyzed_date", today)
-        .eq("email", email)
-        .order("created_at")
-        .execute()
-        .data or []
-    )
 
 
 def check_vip(email: str) -> bool:
     if not email:
         return False
-    res = requests.get(f"{BACKEND_URL}/user-status", params={"email": email}, timeout=5)
-    return res.ok and res.json().get("is_vip", False)
+    try:
+        user = get_user(email)
+        return bool(user and user.get("is_vip"))
+    except Exception:
+        return False
 
 
 # ── VIP activation banner ─────────────────────────────────────────────────────
-params = st.query_params
-if params.get("vip_activated") == "1":
+if st.query_params.get("vip_activated") == "1":
     st.toast("🌟 ¡Pago confirmado! Tu cuenta VIP ya está activa.", icon="✅")
     st.query_params.clear()
 
@@ -74,7 +58,7 @@ with st.sidebar:
 
     st.divider()
     if st.button("🔄 Actualizar galería"):
-        st.cache_data.clear()
+        st.rerun()
 
 # ── Upload & Analyze ──────────────────────────────────────────────────────────
 st.title("🍽️ CalorieApp")
@@ -94,34 +78,68 @@ if uploaded:
         else:
             with st.spinner("Analizando imagen…"):
                 try:
-                    resp = requests.post(
-                        f"{BACKEND_URL}/analyze",
-                        files={"image": (uploaded.name, uploaded.getvalue(), uploaded.type)},
-                        params={"tier": tier, "email": email},
-                        timeout=60,
-                    )
-                except requests.ConnectionError:
-                    st.error("No se puede conectar al servidor. ¿Está corriendo `python main.py`?")
-                    st.stop()
+                    image_bytes = uploaded.getvalue()
+                    media_type = uploaded.type
 
-            if resp.ok:
-                data = resp.json()
-                st.success(f"**{data['food_name']}**")
-                st.toast("🍽️ ¡Añadido a tu diario!")
-                c1, c2, c3, c4, c5 = st.columns(5)
-                c1.metric("Calorías", f"{data['estimated_calories']} kcal")
-                m = data["macronutrients"]
-                c2.metric("Proteína", f"{m['protein_g']} g")
-                c3.metric("Carbos", f"{m['carbs_g']} g")
-                c4.metric("Grasa", f"{m['fat_g']} g")
-                c5.metric("Fibra", f"{m['fiber_g']} g")
-                st.caption(
-                    f"Modelo: {data['model_used']} · Confianza: {data['confidence']}"
-                    + (" · ✓ desde caché" if data.get("cache_hit") else "")
-                )
-                st.cache_data.clear()
-            else:
-                st.error(f"Error {resp.status_code}: {resp.json().get('detail', 'Error desconocido')}")
+                    # Server-side VIP guard
+                    effective_tier = tier
+                    if effective_tier == "Pro":
+                        user = get_user(email)
+                        if not user or not user.get("is_vip"):
+                            effective_tier = "Basic"
+
+                    image_hash = hash_image(image_bytes)
+                    cached = get_cached_analysis(image_hash)
+
+                    if cached:
+                        result = cached
+                        print(f"[CACHE HIT] hash={image_hash[:12]} model={result.model_used} email={email}")
+                    else:
+                        result = analyze_food(image_bytes, media_type, user_tier=effective_tier)
+                        print(f"[API CALL] tier={effective_tier} model={result.model_used} email={email} hash={image_hash[:12]}")
+
+                    save_analysis(result, image_hash, effective_tier, email=email)
+                    st.session_state["last_analysis"] = result
+                    st.session_state["just_analyzed"] = True
+
+                except Exception as exc:
+                    st.error(f"Error al analizar: {exc}")
+
+# ── Analysis Result ───────────────────────────────────────────────────────────
+if "last_analysis" in st.session_state:
+    result = st.session_state["last_analysis"]
+
+    if st.session_state.pop("just_analyzed", False):
+        st.toast("🍽️ ¡Añadido a tu diario!")
+
+    st.success(f"**{result.food_name}**")
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Calorías", f"{result.estimated_calories} kcal")
+    m = result.macronutrients
+    c2.metric("Proteína", f"{m.protein_g} g")
+    c3.metric("Carbos", f"{m.carbs_g} g")
+    c4.metric("Grasa", f"{m.fat_g} g")
+    c5.metric("Fibra", f"{m.fiber_g} g")
+
+    chart_df = pd.DataFrame(
+        {"Gramos": [m.protein_g, m.carbs_g, m.fat_g]},
+        index=["Proteína", "Carbos", "Grasa"],
+    )
+    st.bar_chart(chart_df)
+
+    if result.portion_size_g:
+        st.caption(f"🍽️ Porción estimada: {result.portion_size_g} g/ml")
+    if result.allergens:
+        st.warning(f"⚠️ Alérgenos detectados: {', '.join(result.allergens)}")
+    if result.health_score is not None:
+        icon = "🟢" if result.health_score >= 7 else "🟡" if result.health_score >= 4 else "🔴"
+        st.info(f"{icon} Score de Salud: **{result.health_score}/10** — {result.health_score_reason or ''}")
+
+    st.caption(
+        f"Modelo: {result.model_used} · Confianza: {result.confidence}"
+        + (" · ✓ desde caché" if result.cache_hit else "")
+    )
 
 st.divider()
 
@@ -131,7 +149,8 @@ st.subheader("Lo que comí hoy")
 entries = get_today_entries(email or None)
 
 if not entries:
-    st.info("Todavía no has registrado ningún alimento hoy.")
+    msg = "Todavía no has registrado ningún alimento hoy." if email else "Ingresa tu correo en el sidebar para ver tu historial."
+    st.info(msg)
 else:
     total = sum(e["estimated_calories"] for e in entries)
     remaining = daily_goal - total
@@ -181,7 +200,7 @@ else:
             c3.metric("Grasa", f"{entry['fat_g']} g")
             c4.metric("Fibra", f"{entry['fiber_g']} g")
 
-    # ── Health Coach (al final de la galería) ─────────────────────────────
+    # ── Health Coach ──────────────────────────────────────────────────────────
     st.divider()
     st.markdown("#### 🌟 Plan Nutricional para Mañana")
 
@@ -193,17 +212,27 @@ else:
         col_desc.markdown("**$9.99** — pago único, activación inmediata")
         if col_btn.button("Upgrade a VIP →", type="primary"):
             try:
-                r = requests.post(
-                    f"{BACKEND_URL}/create-checkout-session",
-                    params={"email": email},
-                    timeout=10,
+                session = stripe.checkout.Session.create(
+                    payment_method_types=["card"],
+                    line_items=[
+                        {
+                            "price_data": {
+                                "currency": "usd",
+                                "product_data": {"name": "CalorieApp VIP"},
+                                "unit_amount": 999,
+                            },
+                            "quantity": 1,
+                        }
+                    ],
+                    mode="payment",
+                    customer_email=email,
+                    metadata={"email": email},
+                    success_url=STRIPE_SUCCESS_URL,
+                    cancel_url=STRIPE_CANCEL_URL,
                 )
-                if r.ok:
-                    st.session_state["checkout_url"] = r.json()["checkout_url"]
-                else:
-                    st.error(r.json().get("detail", "Error al crear sesión de pago"))
-            except requests.ConnectionError:
-                st.error("No se puede conectar al servidor.")
+                st.session_state["checkout_url"] = session.url
+            except stripe.StripeError as exc:
+                st.error(f"Error al crear sesión de pago: {exc}")
         if "checkout_url" in st.session_state:
             st.link_button(
                 "Ir al pago seguro (Stripe) →",
@@ -214,18 +243,10 @@ else:
         if st.button("Generar Plan Nutricional con Claude Sonnet", type="primary", use_container_width=True):
             with st.spinner("Claude Sonnet analizando tu dieta del día…"):
                 try:
-                    r = requests.post(
-                        f"{BACKEND_URL}/health-analysis",
-                        params={"email": email},
-                        timeout=90,
-                    )
-                except requests.ConnectionError:
-                    st.error("No se puede conectar al servidor.")
-                    st.stop()
-            if r.ok:
-                with st.expander("Tu plan para mañana", expanded=True):
-                    st.markdown(r.json()["advice"])
-            elif r.status_code == 403:
-                st.error("Estado VIP no reconocido. Intenta actualizar la página.")
-            else:
-                st.error(r.json().get("detail", "Error desconocido"))
+                    advice = analyze_health(entries)
+                    st.session_state["health_advice"] = advice
+                except Exception as exc:
+                    st.error(f"Error al generar plan: {exc}")
+        if "health_advice" in st.session_state:
+            with st.expander("Tu plan para mañana", expanded=True):
+                st.markdown(st.session_state["health_advice"])

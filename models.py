@@ -1,5 +1,6 @@
+from typing import Literal, Optional
+
 from pydantic import BaseModel
-from typing import Literal
 
 
 class Macronutrients(BaseModel):
@@ -16,3 +17,8 @@ class FoodAnalysis(BaseModel):
     model_used: str
     confidence: Literal["high", "medium", "low"]
     cache_hit: bool = False
+    # Pro-only fields
+    portion_size_g: Optional[int] = None
+    allergens: Optional[list[str]] = None
+    health_score: Optional[int] = None
+    health_score_reason: Optional[str] = None
