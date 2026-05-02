@@ -4,6 +4,7 @@ from typing import Literal
 import stripe
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 from database import (
@@ -22,12 +23,21 @@ load_dotenv()
 
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
-STRIPE_SUCCESS_URL = os.environ.get("STRIPE_SUCCESS_URL", "http://localhost:8501?vip_activated=1")
-STRIPE_CANCEL_URL = os.environ.get("STRIPE_CANCEL_URL", "http://localhost:8501")
+STRIPE_SUCCESS_URL = os.environ.get("STRIPE_SUCCESS_URL", "https://calorie-app.com/payment-success")
+STRIPE_CANCEL_URL = os.environ.get("STRIPE_CANCEL_URL", "https://calorie-app.com/payment-cancel")
 
 ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
 app = FastAPI(title="CalorieApp Vision API", version="2.0.0")
+
+# ── CORS Configuration for Mobile App ─────────────────────────────────────────
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ── Food analysis ─────────────────────────────────────────────────────────────
@@ -142,9 +152,19 @@ async def stripe_webhook(request: Request):
 # ── Misc ──────────────────────────────────────────────────────────────────────
 
 @app.get("/user-status")
-def user_status(email: str = Query(...)):
-    user = get_user(email)
-    return {"email": email, "is_vip": bool(user and user.get("is_vip"))}
+def user_status(email: str = Query(..., description="User email")):
+    if not email or not email.strip():
+        raise HTTPException(status_code=400, detail="Email is required")
+
+    try:
+        user = get_user(email)
+        return {
+            "email": email,
+            "is_vip": bool(user and user.get("is_vip")),
+            "exists": user is not None
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error fetching user status: {str(exc)}") from exc
 
 
 @app.get("/health")
