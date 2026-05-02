@@ -6,14 +6,13 @@ STREAMLIT_PORT=8501
 
 echo "[start.sh] Iniciando Streamlit en puerto interno $STREAMLIT_PORT…"
 streamlit run app.py \
-    --server.port "$STREAMLIT_PORT" \
-    --server.address 127.0.0.1 \
-    --server.headless true \
-    --server.baseUrlPath "" \
-    --server.enableCORS false \
-    --server.enableXsrfProtection false \
-    --server.enableWebsocketCompression false \
-    --browser.gatherUsageStats false &
+    --server.headless=true \
+    --server.port=$STREAMLIT_PORT \
+    --server.address=127.0.0.1 \
+    --server.enableCORS=false \
+    --server.enableXsrfProtection=false \
+    --server.enableWebsocketCompression=false \
+    --browser.gatherUsageStats=false &
 
 # Esperar a que Streamlit esté listo antes de abrir el gateway
 sleep 4

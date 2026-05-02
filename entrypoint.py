@@ -95,9 +95,11 @@ async def ws_proxy(websocket: WebSocket, path: str):
 
     try:
         ws_headers = {k: v for k, v in websocket.headers.items() if k.lower() not in _HOP_BY_HOP}
+        subprotocols = websocket.headers.get("sec-websocket-protocol", "").split(", ") if "sec-websocket-protocol" in websocket.headers else []
         async with websockets.connect(
             target,
             extra_headers=ws_headers,
+            subprotocols=subprotocols,
             open_timeout=10,
             ping_timeout=None,
             close_timeout=None,
@@ -170,6 +172,8 @@ async def http_proxy(request: Request, path: str):
         if k.lower() not in _HOP_BY_HOP
     }
     headers["host"] = f"localhost:{STREAMLIT_PORT}"
+    headers["x-forwarded-for"] = request.client.host
+    headers["x-forwarded-proto"] = request.url.scheme
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
