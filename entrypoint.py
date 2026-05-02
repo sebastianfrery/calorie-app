@@ -55,39 +55,13 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/_stcore/health")
-async def stcore_health():
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(f"http://localhost:{STREAMLIT_PORT}/_stcore/health")
-        return Response(content=response.content, status_code=response.status_code, headers=dict(response.headers))
-    except Exception as exc:
-        print(f"[STCORE ✗] health: {exc}", flush=True)
-        return Response(content=b"", status_code=502)
-
-
-@app.post("/_stcore/stream")
-async def stcore_stream(request: Request):
-    try:
-        async with httpx.AsyncClient(timeout=None) as client:
-            response = await client.post(
-                f"http://localhost:{STREAMLIT_PORT}/_stcore/stream",
-                content=await request.body(),
-                headers={k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP}
-            )
-        return Response(content=response.content, status_code=response.status_code, headers=dict(response.headers))
-    except Exception as exc:
-        print(f"[STCORE ✗] stream: {exc}", flush=True)
-        return Response(content=b"", status_code=502)
-
-
 # ── 2. Proxy WebSocket — scope type "websocket" nunca colisiona con HTTP ────────
 #    Reenvía TODOS los headers del cliente al servidor upstream.
 
 @app.websocket("/{path:path}")
 async def ws_proxy(websocket: WebSocket, path: str):
     query = websocket.url.query
-    target = f"ws://localhost:{STREAMLIT_PORT}/{path}"
+    target = f"ws://127.0.0.1:{STREAMLIT_PORT}/{path}"
     if query:
         target += f"?{query}"
 
@@ -160,7 +134,7 @@ async def ws_proxy(websocket: WebSocket, path: str):
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
 )
 async def http_proxy(request: Request, path: str):
-    url = f"http://localhost:{STREAMLIT_PORT}/{path}"
+    url = f"http://127.0.0.1:{STREAMLIT_PORT}/{path}"
     query = str(request.url.query)
     if query:
         url += f"?{query}"
@@ -171,7 +145,7 @@ async def http_proxy(request: Request, path: str):
         k: v for k, v in request.headers.items()
         if k.lower() not in _HOP_BY_HOP
     }
-    headers["host"] = f"localhost:{STREAMLIT_PORT}"
+    headers["host"] = f"127.0.0.1:{STREAMLIT_PORT}"
     headers["x-forwarded-for"] = request.client.host
     headers["x-forwarded-proto"] = request.url.scheme
     if "sec-websocket-extensions" in request.headers:
