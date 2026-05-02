@@ -65,10 +65,11 @@ async def ws_proxy(websocket: WebSocket, path: str):
     if query:
         target += f"?{query}"
 
-    print(f"[WS  ←] /{path}{'?' + query if query else ''}", flush=True)
+    print(f"[WS  ←] Conectando a {target} con Host forzado", flush=True)
 
     try:
         ws_headers = {k: v for k, v in websocket.headers.items() if k.lower() not in _HOP_BY_HOP}
+        ws_headers["host"] = f"127.0.0.1:{STREAMLIT_PORT}"
         subprotocols = websocket.headers.get("sec-websocket-protocol", "").split(", ") if "sec-websocket-protocol" in websocket.headers else []
         async with websockets.connect(
             target,

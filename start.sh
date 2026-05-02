@@ -8,7 +8,8 @@ echo "[start.sh] Iniciando Streamlit en puerto interno $STREAMLIT_PORT…"
 streamlit run app.py \
     --server.headless=true \
     --server.port=$STREAMLIT_PORT \
-    --server.address=0.0.0.0 \
+    --server.address=127.0.0.1 \
+    --server.baseUrlPath="" \
     --server.enableCORS=false \
     --server.enableXsrfProtection=false \
     --server.enableWebsocketCompression=false \
