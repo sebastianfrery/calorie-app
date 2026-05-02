@@ -27,10 +27,21 @@ _supabase_client: Client | None = None
 def _client() -> Client:
     global _supabase_client
     if _supabase_client is None:
-        _supabase_client = create_client(
-            os.environ["SUPABASE_URL"],
-            os.environ["SUPABASE_SERVICE_ROLE_KEY"],
-        )
+        url = os.environ.get("SUPABASE_URL", "").strip()
+        api_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+
+        if not url:
+            raise ValueError("CRÍTICO: Variable SUPABASE_URL no encontrada en el entorno de Render")
+        if not api_key:
+            raise ValueError("CRÍTICO: Variable SUPABASE_SERVICE_ROLE_KEY no encontrada en el entorno de Render")
+
+        if url.endswith("/rest/v1/"):
+            url = url[:-9]
+
+        print(f"DEBUG: Iniciando cliente Supabase con URL que empieza por: {url[:15]}")
+        logger.info("Conectando a Supabase: %s", url[:15])
+
+        _supabase_client = create_client(url, api_key)
     return _supabase_client
 
 
