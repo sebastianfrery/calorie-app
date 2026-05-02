@@ -27,6 +27,8 @@ _HOP_BY_HOP = frozenset({
 app = FastAPI(title="CalorieApp Gateway")
 
 
+# ── 1. Stripe webhook — definida PRIMERO para evitar capturas por el catch-all ──
+
 @app.post("/stripe-webhook")
 async def stripe_webhook(request: Request):
     payload = await request.body()
@@ -53,57 +55,87 @@ def health():
     return {"status": "ok"}
 
 
+# ── 2. Proxy WebSocket — scope type "websocket" nunca colisiona con HTTP ────────
+#    ping_timeout=None evita que la librería cierre la conexión por timeout de pings.
+
 @app.websocket("/{path:path}")
 async def ws_proxy(websocket: WebSocket, path: str):
-    await websocket.accept()
     query = websocket.url.query
     target = f"ws://localhost:{STREAMLIT_PORT}/{path}"
     if query:
         target += f"?{query}"
 
-    try:
-        async with websockets.connect(target) as upstream:
+    print(f"[WS  ←] /{path}{'?' + query if query else ''}", flush=True)
 
-            async def to_upstream():
+    try:
+        async with websockets.connect(
+            target,
+            open_timeout=10,
+            ping_timeout=None,   # sin pings automáticos que maten la conexión
+            close_timeout=5,
+        ) as upstream:
+            await websocket.accept()
+            print(f"[WS  ↔] upstream conectado: {target}", flush=True)
+
+            async def client_to_upstream():
                 try:
                     while True:
                         msg = await websocket.receive()
-                        if msg.get("bytes") is not None:
+                        if msg["type"] == "websocket.disconnect":
+                            print(f"[WS  ✗] cliente desconectado de /{path}", flush=True)
+                            break
+                        elif msg.get("bytes") is not None:
                             await upstream.send(msg["bytes"])
                         elif msg.get("text") is not None:
                             await upstream.send(msg["text"])
-                        elif msg.get("type") == "websocket.disconnect":
-                            break
-                except Exception:
-                    pass
+                except Exception as exc:
+                    print(f"[WS  !] client→upstream error en /{path}: {type(exc).__name__}: {exc}", flush=True)
 
-            async def to_client():
+            async def upstream_to_client():
                 try:
                     async for msg in upstream:
                         if isinstance(msg, bytes):
                             await websocket.send_bytes(msg)
                         else:
                             await websocket.send_text(msg)
-                except Exception:
+                except Exception as exc:
+                    print(f"[WS  !] upstream→client error en /{path}: {type(exc).__name__}: {exc}", flush=True)
+
+            tasks = [
+                asyncio.create_task(client_to_upstream()),
+                asyncio.create_task(upstream_to_client()),
+            ]
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
                     pass
 
-            tasks = [asyncio.create_task(to_upstream()), asyncio.create_task(to_client())]
-            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            for t in pending:
-                t.cancel()
-    except Exception:
+            print(f"[WS  ✓] sesión terminada para /{path}", flush=True)
+
+    except Exception as exc:
+        print(f"[WS  ✗] error al conectar upstream /{path}: {type(exc).__name__}: {exc}", flush=True)
         try:
             await websocket.close(1011)
         except Exception:
             pass
 
 
-@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
+# ── 3. Proxy HTTP catch-all — scope type "http", nunca captura WebSockets ───────
+
+@app.api_route(
+    "/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+)
 async def http_proxy(request: Request, path: str):
     url = f"http://localhost:{STREAMLIT_PORT}/{path}"
     query = str(request.url.query)
     if query:
         url += f"?{query}"
+
+    print(f"[HTTP ←] {request.method} /{path}{'?' + query if query else ''}", flush=True)
 
     headers = {
         k: v for k, v in request.headers.items()
@@ -111,13 +143,18 @@ async def http_proxy(request: Request, path: str):
     }
     headers["host"] = f"localhost:{STREAMLIT_PORT}"
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.request(
-            method=request.method,
-            url=url,
-            headers=headers,
-            content=await request.body(),
-        )
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.request(
+                method=request.method,
+                url=url,
+                headers=headers,
+                content=await request.body(),
+            )
+        print(f"[HTTP →] {response.status_code} /{path}", flush=True)
+    except Exception as exc:
+        print(f"[HTTP ✗] {request.method} /{path}: {type(exc).__name__}: {exc}", flush=True)
+        return Response(content=b"Gateway error", status_code=502)
 
     resp_headers = {
         k: v for k, v in response.headers.items()
