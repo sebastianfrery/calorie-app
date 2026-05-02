@@ -9,6 +9,7 @@ streamlit run app.py \
     --server.port "$STREAMLIT_PORT" \
     --server.address 127.0.0.1 \
     --server.headless true \
+    --server.baseUrlPath "" \
     --server.enableCORS false \
     --server.enableXsrfProtection false \
     --server.enableWebsocketCompression false \

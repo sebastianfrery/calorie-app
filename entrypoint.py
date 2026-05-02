@@ -55,8 +55,34 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/_stcore/health")
+async def stcore_health():
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(f"http://localhost:{STREAMLIT_PORT}/_stcore/health")
+        return Response(content=response.content, status_code=response.status_code, headers=dict(response.headers))
+    except Exception as exc:
+        print(f"[STCORE ✗] health: {exc}", flush=True)
+        return Response(content=b"", status_code=502)
+
+
+@app.post("/_stcore/stream")
+async def stcore_stream(request: Request):
+    try:
+        async with httpx.AsyncClient(timeout=None) as client:
+            response = await client.post(
+                f"http://localhost:{STREAMLIT_PORT}/_stcore/stream",
+                content=await request.body(),
+                headers={k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP}
+            )
+        return Response(content=response.content, status_code=response.status_code, headers=dict(response.headers))
+    except Exception as exc:
+        print(f"[STCORE ✗] stream: {exc}", flush=True)
+        return Response(content=b"", status_code=502)
+
+
 # ── 2. Proxy WebSocket — scope type "websocket" nunca colisiona con HTTP ────────
-#    ping_timeout=None evita que la librería cierre la conexión por timeout de pings.
+#    Reenvía TODOS los headers del cliente al servidor upstream.
 
 @app.websocket("/{path:path}")
 async def ws_proxy(websocket: WebSocket, path: str):
@@ -68,11 +94,13 @@ async def ws_proxy(websocket: WebSocket, path: str):
     print(f"[WS  ←] /{path}{'?' + query if query else ''}", flush=True)
 
     try:
+        ws_headers = {k: v for k, v in websocket.headers.items() if k.lower() not in _HOP_BY_HOP}
         async with websockets.connect(
             target,
+            extra_headers=ws_headers,
             open_timeout=10,
-            ping_timeout=None,   # sin pings automáticos que maten la conexión
-            close_timeout=5,
+            ping_timeout=None,
+            close_timeout=None,
         ) as upstream:
             await websocket.accept()
             print(f"[WS  ↔] upstream conectado: {target}", flush=True)
