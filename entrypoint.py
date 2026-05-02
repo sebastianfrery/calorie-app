@@ -174,6 +174,8 @@ async def http_proxy(request: Request, path: str):
     headers["host"] = f"localhost:{STREAMLIT_PORT}"
     headers["x-forwarded-for"] = request.client.host
     headers["x-forwarded-proto"] = request.url.scheme
+    if "sec-websocket-extensions" in request.headers:
+        headers["sec-websocket-extensions"] = request.headers.get("sec-websocket-extensions")
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -192,8 +194,9 @@ async def http_proxy(request: Request, path: str):
         k: v for k, v in response.headers.items()
         if k.lower() not in _HOP_BY_HOP
     }
+    content = b"" if response.status_code == 304 else response.content
     return Response(
-        content=response.content,
+        content=content,
         status_code=response.status_code,
         headers=resp_headers,
     )

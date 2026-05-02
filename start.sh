@@ -15,7 +15,7 @@ streamlit run app.py \
     --browser.gatherUsageStats=false &
 
 # Esperar a que Streamlit esté listo antes de abrir el gateway
-sleep 4
+sleep 6
 
 echo "[start.sh] Iniciando gateway (FastAPI) en puerto público $PORT…"
 exec uvicorn entrypoint:app --host 0.0.0.0 --port "$PORT"

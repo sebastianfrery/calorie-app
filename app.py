@@ -13,8 +13,9 @@ from vision_engine import analyze_food
 load_dotenv()
 
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
-STRIPE_SUCCESS_URL = os.environ.get("STRIPE_SUCCESS_URL", "http://localhost:8501?vip_activated=1")
-STRIPE_CANCEL_URL = os.environ.get("STRIPE_CANCEL_URL", "http://localhost:8501")
+_BASE_URL = "http://localhost:8501" if "localhost" in os.getenv("STREAMLIT_SERVER_BASEURL", "http://localhost:8501") else os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8501")
+STRIPE_SUCCESS_URL = os.getenv("STRIPE_SUCCESS_URL", f"{_BASE_URL}?vip_activated=1")
+STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", _BASE_URL)
 
 st.set_page_config(page_title="CalorieApp", page_icon="🍽️", layout="centered")
 
